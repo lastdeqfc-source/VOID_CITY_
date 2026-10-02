@@ -1,6 +1,7 @@
 'use strict';
 
 const tg = window.Telegram?.WebApp;
+
 tg?.ready();
 tg?.expand();
 
@@ -18,8 +19,13 @@ function authHeaders() {
 let me = null;
 let loading = false;
 let lastScreen = 'home';
+
 const cache = new Map();
 const inflight = new Map();
+
+/* =========================
+   API
+========================= */
 
 async function api(path, options = {}, cfg = {}) {
   const method = (options.method || 'GET').toUpperCase();
@@ -29,10 +35,15 @@ async function api(path, options = {}, cfg = {}) {
     return cache.get(cacheKey);
   }
 
-  if (inflight.has(cacheKey)) return inflight.get(cacheKey);
+  if (inflight.has(cacheKey)) {
+    return inflight.get(cacheKey);
+  }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), cfg.timeout || 9000);
+  const timer = setTimeout(
+    () => controller.abort(),
+    cfg.timeout || 9000
+  );
 
   const headers = {
     'Accept': 'application/json',
@@ -50,9 +61,9 @@ async function api(path, options = {}, cfg = {}) {
     signal: controller.signal,
     cache: 'no-store'
   })
-    .then(async r => {
-      const type = r.headers.get('content-type') || '';
-      const text = await r.text();
+    .then(async response => {
+      const type = response.headers.get('content-type') || '';
+      const text = await response.text();
 
       let data = {};
 
@@ -66,19 +77,23 @@ async function api(path, options = {}, cfg = {}) {
         try {
           data = JSON.parse(text);
         } catch {
-          data = {detail: text.slice(0, 160)};
+          data = {
+            detail: text.slice(0, 160)
+          };
         }
       }
 
-      if (!r.ok) {
-        if (r.status === 401) {
+      if (!response.ok) {
+        if (response.status === 401) {
           throw new Error(
-            'Telegram не передал данные сессии. Закрой Mini App и открой его заново через «🎮 Играть» в Telegram.'
+            'Открой игру через Telegram'
           );
         }
 
         throw new Error(
-          data.detail || data.message || `Ошибка сервера (${r.status})`
+          data.detail ||
+          data.message ||
+          `Ошибка сервера (${response.status})`
         );
       }
 
@@ -94,19 +109,27 @@ async function api(path, options = {}, cfg = {}) {
     });
 
   inflight.set(cacheKey, job);
+
   return job;
 }
 
+/* =========================
+   HELPERS
+========================= */
+
 function toast(text) {
   const el = document.getElementById('toast');
+
+  if (!el) return;
+
   el.textContent = text;
   el.classList.add('show');
 
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(
-    () => el.classList.remove('show'),
-    1800
-  );
+
+  toast.timer = setTimeout(() => {
+    el.classList.remove('show');
+  }, 1800);
 }
 
 function setBusy(button, busy = true) {
@@ -117,29 +140,38 @@ function setBusy(button, busy = true) {
 }
 
 function invalidate(prefix = '') {
-  for (const k of cache.keys()) {
-    if (!prefix || k.includes(prefix)) {
-      cache.delete(k);
+  for (const key of cache.keys()) {
+    if (!prefix || key.includes(prefix)) {
+      cache.delete(key);
     }
   }
 }
 
-function card(title, body, cls = '') {
-  return `<section class="card ${cls}">
-    <div class="title">${title}</div>
-    ${body}
-  </section>`;
+function esc(value = '') {
+  return String(value).replace(
+    /[&<>"']/g,
+    c => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }[c])
+  );
 }
 
-function esc(s = '') {
-  return String(s).replace(/[&<>"']/g, c => ({
-    '&':'&amp;',
-    '<':'&lt;',
-    '>':'&gt;',
-    '"':'&quot;',
-    "'":'&#39;'
-  }[c]));
+function card(title, body, cls = '') {
+  return `
+    <section class="card ${cls}">
+      <div class="title">${title}</div>
+      ${body}
+    </section>
+  `;
 }
+
+/* =========================
+   LOADING
+========================= */
 
 async function load(force = false) {
   if (loading) return;
@@ -147,88 +179,406 @@ async function load(force = false) {
   loading = true;
 
   try {
-    me = await api('/api/me', {}, {cache: !force});
+    me = await api(
+      '/api/me',
+      {},
+      {cache: !force}
+    );
+
     renderHeader();
     menu();
-  } catch (e) {
+
+  } catch (error) {
+
     document.getElementById('content').innerHTML =
       card(
         '⚠️ Не удалось подключиться',
-        `<div class="muted">${esc(e.message)}</div>
-         <button class="action full" onclick="load(true)">Повторить</button>`
+        `
+          <div class="muted">
+            ${esc(error.message)}
+          </div>
+
+          <button
+            class="action full"
+            onclick="load(true)"
+          >
+            Повторить
+          </button>
+        `
       );
+
   } finally {
     loading = false;
   }
 }
 
+/* =========================
+   HEADER
+========================= */
+
 function renderHeader() {
+  if (!me || !me.player) return;
+
   const p = me.player;
 
-  document.getElementById('name').textContent = p.name;
-  document.getElementById('avatar').textContent = p.avatar;
-  document.getElementById('lvl').textContent =
-    `Уровень ${p.level} · ${p.coins} 🪙 · ⚡ ${p.energy}`;
+  const name = document.getElementById('name');
+  const avatar = document.getElementById('avatar');
+  const lvl = document.getElementById('lvl');
+  const xpbar = document.getElementById('xpbar');
 
-  document.getElementById('xpbar').style.width =
-    Math.min(
-      100,
-      p.xp / (100 + (p.level - 1) * 75) * 100
-    ) + '%';
+  if (name) {
+    name.textContent = p.name;
+  }
+
+  if (avatar) {
+    avatar.textContent = p.avatar;
+  }
+
+  if (lvl) {
+    lvl.textContent =
+      `Уровень ${p.level} · ${p.coins} 🪙 · ⚡ ${p.energy}`;
+  }
+
+  if (xpbar) {
+    const need =
+      100 + (p.level - 1) * 75;
+
+    xpbar.style.width =
+      Math.min(
+        100,
+        (p.xp / need) * 100
+      ) + '%';
+  }
 }
 
-const menuItems = [
-  ['🏙️','Город','Развивай здания и собирай доход','city'],
-  ['🗺️','Карта','Районы, точки интереса и новые сектора','map'],
-  ['📖','Сюжет','Главы истории и городские события','story'],
-  ['🧑‍🎨','Собери персонажа','Стиль, аватар и косметика','character'],
-  ['🎒','Инвентарь','Ресурсы, предметы и коллекции','inventory'],
-  ['🏢','Недвижимость','Квартира, здания и улучшения','property'],
-  ['⚔️','Арена','Тренировочные бои без ставок','arena'],
-  ['👥','Кланы','Создавай клан и играй вместе','clan'],
-  ['🧩','Коллекции','Собирай предметы города','collections'],
-  ['🏆','Достижения','Открывай награды за прогресс','achievements'],
-  ['📰','Новости','Хроника и события города','news'],
-  ['👤','Профиль','Имя, аватар и статистика','profile'],
-  ['❓','Помощь','Как работает VOID CITY','help'],
-  ['⚙️','Настройки','Настройки интерфейса','settings']
-];
+/* =========================
+   BOTTOM NAVIGATION
+========================= */
+
+function renderTabNav(active = 'home') {
+  document
+    .querySelectorAll('.bottom-nav')
+    .forEach(el => el.remove());
+
+  const nav = document.createElement('nav');
+
+  nav.className = 'bottom-nav';
+
+  const tabs = [
+    ['home', '🏠', 'Главная'],
+    ['quests', '📋', 'Задания'],
+    ['games', '🎮', 'Игры'],
+    ['shop', '🛒', 'Магазин'],
+    ['story', '📖', 'История']
+  ];
+
+  nav.innerHTML = tabs.map(
+    ([id, icon, title]) => `
+      <button
+        class="nav-tab ${active === id ? 'active' : ''}"
+        onclick="openTab('${id}')"
+      >
+        <span class="nav-icon">${icon}</span>
+        <span class="nav-title">${title}</span>
+      </button>
+    `
+  ).join('');
+
+  document.body.appendChild(nav);
+}
+
+function openTab(tab) {
+  if (tab === 'home') {
+    menu();
+    return;
+  }
+
+  if (tab === 'quests') {
+    questsScreen();
+    return;
+  }
+
+  if (tab === 'games') {
+    gamesScreen();
+    return;
+  }
+
+  if (tab === 'shop') {
+    shopScreen();
+    return;
+  }
+
+  if (tab === 'story') {
+    story();
+    return;
+  }
+}
+
+/* =========================
+   HOME
+========================= */
 
 function menu() {
   lastScreen = 'home';
 
-  document.getElementById('content').innerHTML =
-    card(
-      '🌆 VOID CITY',
-      `<div class="menu-list">
-        ${menuItems.map(([i,t,d,s]) => `
-          <button class="menu-card" onclick="openScreen('${s}')">
-            <span class="menu-icon">${i}</span>
+  renderTabNav('home');
+
+  const p = me?.player || {};
+
+  document.getElementById('content').innerHTML = `
+
+    <section class="home-hero">
+
+      <h2>
+        🌆 VOID CITY
+      </h2>
+
+      <p class="muted">
+        Твой город. Твоя история.
+        Твой путь.
+      </p>
+
+    </section>
+
+    ${card(
+      '⚡ Быстрые действия',
+      `
+        <div class="quick-grid">
+
+          <button
+            class="action"
+            onclick="collect(this)"
+          >
+            ⚡ Собрать
+          </button>
+
+          <button
+            class="ghost"
+            onclick="daily(this)"
+          >
+            🎁 Награда
+          </button>
+
+        </div>
+      `
+    )}
+
+    ${card(
+      '🏙️ Город',
+      `
+        <div class="menu-list">
+
+          <button
+            class="menu-card"
+            onclick="openScreen('city')"
+          >
+            <span class="menu-icon">🏙️</span>
+
             <span>
-              <b>${t}</b>
-              <small>${d}</small>
+              <b>Город</b>
+              <small>
+                Развивай здания и собирай ресурсы
+              </small>
             </span>
+
             <span class="arrow">›</span>
           </button>
-        `).join('')}
-      </div>`
-    ) +
-    card(
-      '⚡ Быстрые действия',
-      `<div class="quick-grid">
-        <button class="action" onclick="collect(this)">⚡ Собрать</button>
-        <button class="ghost" onclick="daily(this)">🎁 Награда</button>
-      </div>`
-    );
+
+          <button
+            class="menu-card"
+            onclick="openScreen('map')"
+          >
+            <span class="menu-icon">🗺️</span>
+
+            <span>
+              <b>Карта</b>
+              <small>
+                Исследуй районы города
+              </small>
+            </span>
+
+            <span class="arrow">›</span>
+          </button>
+
+          <button
+            class="menu-card"
+            onclick="openScreen('character')"
+          >
+            <span class="menu-icon">🧑‍🎨</span>
+
+            <span>
+              <b>Персонаж</b>
+              <small>
+                Аватар и внешний стиль
+              </small>
+            </span>
+
+            <span class="arrow">›</span>
+          </button>
+
+          <button
+            class="menu-card"
+            onclick="openScreen('inventory')"
+          >
+            <span class="menu-icon">🎒</span>
+
+            <span>
+              <b>Инвентарь</b>
+              <small>
+                Предметы и ресурсы
+              </small>
+            </span>
+
+            <span class="arrow">›</span>
+          </button>
+
+        </div>
+      `
+    )}
+
+    ${card(
+      '👥 Сообщество',
+      `
+        <div class="menu-list">
+
+          <button
+            class="menu-card"
+            onclick="openScreen('clan')"
+          >
+            <span class="menu-icon">👥</span>
+
+            <span>
+              <b>Кланы</b>
+              <small>
+                Играй вместе с другими
+              </small>
+            </span>
+
+            <span class="arrow">›</span>
+          </button>
+
+          <button
+            class="menu-card"
+            onclick="openScreen('collections')"
+          >
+            <span class="menu-icon">🧩</span>
+
+            <span>
+              <b>Коллекции</b>
+              <small>
+                Собирай предметы города
+              </small>
+            </span>
+
+            <span class="arrow">›</span>
+          </button>
+
+          <button
+            class="menu-card"
+            onclick="openScreen('achievements')"
+          >
+            <span class="menu-icon">🏆</span>
+
+            <span>
+              <b>Достижения</b>
+              <small>
+                Открывай награды за прогресс
+              </small>
+            </span>
+
+            <span class="arrow">›</span>
+          </button>
+
+        </div>
+      `
+    )}
+
+    ${card(
+      '👤 Профиль',
+      `
+        <div class="menu-list">
+
+          <button
+            class="menu-card"
+            onclick="openScreen('profile')"
+          >
+            <span class="menu-icon">👤</span>
+
+            <span>
+              <b>${esc(p.name || 'Профиль')}</b>
+              <small>
+                Статистика и настройки профиля
+              </small>
+            </span>
+
+            <span class="arrow">›</span>
+          </button>
+
+          <button
+            class="menu-card"
+            onclick="openScreen('news')"
+          >
+            <span class="menu-icon">📰</span>
+
+            <span>
+              <b>Новости</b>
+              <small>
+                События VOID CITY
+              </small>
+            </span>
+
+            <span class="arrow">›</span>
+          </button>
+
+          <button
+            class="menu-card"
+            onclick="openScreen('help')"
+          >
+            <span class="menu-icon">❓</span>
+
+            <span>
+              <b>Помощь</b>
+              <small>
+                Как работает игра
+              </small>
+            </span>
+
+            <span class="arrow">›</span>
+          </button>
+
+          <button
+            class="menu-card"
+            onclick="openScreen('settings')"
+          >
+            <span class="menu-icon">⚙️</span>
+
+            <span>
+              <b>Настройки</b>
+              <small>
+                Настройки интерфейса
+              </small>
+            </span>
+
+            <span class="arrow">›</span>
+          </button>
+
+        </div>
+      `
+    )}
+
+  `;
 }
+
+/* =========================
+   INTERNAL SCREENS
+========================= */
 
 function openScreen(screen) {
   lastScreen = screen;
 
-  const fn = {
+  const screens = {
     city,
     map,
-    story,
     character,
     inventory,
     property,
@@ -240,14 +590,18 @@ function openScreen(screen) {
     profile,
     help,
     settings
-  }[screen];
+  };
 
-  if (fn) fn();
-  else menu();
+  if (screens[screen]) {
+    screens[screen]();
+  } else {
+    menu();
+  }
 }
 
 function back() {
   menu();
+
   window.scrollTo({
     top: 0,
     behavior: 'smooth'
@@ -256,474 +610,474 @@ function back() {
 
 function head(title) {
   return `
-    <button class="back" onclick="back()">‹ Назад</button>
+    <div class="screen-topbar">
+
+      <button
+        class="back"
+        onclick="back()"
+      >
+        ← Назад
+      </button>
+
+      <div class="screen-title">
+        ${title}
+      </div>
+
+    </div>
+
     ${card(
-      title,
-      '<div id="screen-body"><div class="skeleton"></div><div class="skeleton short"></div></div>'
+      '',
+      `
+        <div id="screen-body">
+          <div class="skeleton"></div>
+          <div class="skeleton short"></div>
+        </div>
+      `,
+      'screen-card'
     )}
   `;
 }
 
-function icon(k) {
+function icon(kind) {
   return {
-    factory:'🏭',
-    lab:'🧪',
-    market:'🏪'
-  }[k] || '🏢';
+    factory: '🏭',
+    lab: '🧪',
+    market: '🏪'
+  }[kind] || '🏢';
 }
 
-function label(k) {
+function label(kind) {
   return {
-    factory:'Фабрика',
-    lab:'Лаборатория',
-    market:'Рынок'
-  }[k] || k;
+    factory: 'Фабрика',
+    lab: 'Лаборатория',
+    market: 'Рынок'
+  }[kind] || kind;
 }
+
+/* =========================
+   CITY
+========================= */
 
 function city() {
   document.getElementById('content').innerHTML =
     head('🏙️ Город');
 
-  const body =
-    `<div class="grid">
-      ${me.buildings.map(b => `
-        <div class="item">
-          <b>${icon(b.kind)} ${label(b.kind)}</b>
-          <div class="muted">Уровень ${b.level}</div>
-          <button
-            class="action full"
-            onclick="upgrade('${b.kind}',this)">
-            Улучшить · ${150 * b.level} 🪙
-          </button>
-        </div>
-      `).join('')}
+  const buildings = me?.buildings || [];
+
+  document.getElementById('screen-body').innerHTML = `
+
+    <div class="grid">
+
+      ${
+        buildings.length
+          ? buildings.map(
+              building => `
+                <div class="item">
+
+                  <b>
+                    ${icon(building.kind)}
+                    ${label(building.kind)}
+                  </b>
+
+                  <div class="muted">
+                    Уровень ${building.level}
+                  </div>
+
+                  <button
+                    class="action full"
+                    onclick="upgrade(
+                      '${esc(building.kind)}',
+                      this
+                    )"
+                  >
+                    Улучшить ·
+                    ${150 * building.level}
+                    🪙
+                  </button>
+
+                </div>
+              `
+            ).join('')
+          : `
+            <div class="item">
+              <b>🏙️ Город создаётся</b>
+              <div class="muted">
+                Здания появятся после загрузки данных.
+              </div>
+            </div>
+          `
+      }
+
     </div>
 
     <div class="quick-grid">
-      <button class="action" onclick="collect(this)">
-        ⚡ Собрать производство
-      </button>
-      <button class="ghost" onclick="daily(this)">
-        🎁 Ежедневная награда
-      </button>
-    </div>`;
 
-  document.getElementById('screen-body').innerHTML = body;
+      <button
+        class="action"
+        onclick="collect(this)"
+      >
+        ⚡ Собрать
+      </button>
+
+      <button
+        class="ghost"
+        onclick="daily(this)"
+      >
+        🎁 Награда
+      </button>
+
+    </div>
+  `;
 }
+
+/* =========================
+   MAP
+========================= */
 
 function map() {
   document.getElementById('content').innerHTML =
     head('🗺️ Карта');
 
-  document.getElementById('screen-body').innerHTML =
-    `<div class="map-grid">
-      ${[
-        '🌃 Ночной район',
-        '🏭 Промзона',
-        '🏟️ Арена',
-        '🕵️ Тайный сектор',
-        '🏠 Квартира',
-        '🚗 Гараж'
-      ].map((x,i) => `
-        <div class="map-tile ${i > 0 ? 'locked' : ''}">
-          <b>${x}</b>
-          <small>${i ? '🔒 Скоро доступно' : '✓ Открыт'}</small>
-        </div>
-      `).join('')}
-    </div>`;
+  const places = [
+    ['🌃', 'Ночной район', true],
+    ['🏭', 'Промзона', false],
+    ['🏟️', 'Арена', false],
+    ['🕵️', 'Тайный сектор', false],
+    ['🏠', 'Квартира', false],
+    ['🚗', 'Гараж', false]
+  ];
+
+  document.getElementById('screen-body').innerHTML = `
+    <div class="map-grid">
+
+      ${places.map(
+        ([emoji, name, open]) => `
+          <div class="map-tile ${open ? '' : 'locked'}">
+
+            <b>
+              ${emoji} ${name}
+            </b>
+
+            <small>
+              ${open ? '✓ Открыт' : '🔒 Скоро доступно'}
+            </small>
+
+          </div>
+        `
+      ).join('')}
+
+    </div>
+  `;
 }
+
+/* =========================
+   STORY
+========================= */
 
 function story() {
-  document.getElementById('content').innerHTML =
-    head('📖 Сюжет');
+  lastScreen = 'story';
 
-  document.getElementById('screen-body').innerHTML =
-    `<div class="story">
-      <b>Глава 1 · Первый сигнал</b>
-      <p class="muted">
-        Город просыпается, а на старом терминале появляется неизвестный сигнал.
-      </p>
-      <button class="action"
-        onclick="toast('Новая глава скоро будет доступна')">
-        Продолжить
+  renderTabNav('story');
+
+  document.getElementById('content').innerHTML = `
+
+    <div class="screen-topbar">
+
+      <button
+        class="back"
+        onclick="menu()"
+      >
+        ← Назад
       </button>
-    </div>`;
+
+      <div class="screen-title">
+        📖 История
+      </div>
+
+    </div>
+
+    ${card(
+      'Глава 1 · Первый сигнал',
+      `
+        <div class="story">
+
+          <b>
+            00:17 — неизвестный сигнал
+          </b>
+
+          <p class="muted">
+            Город давно погрузился в ночь.
+            Большинство районов молчит,
+            но старый терминал внезапно
+            оживает.
+          </p>
+
+          <p class="muted">
+            На экране появляется сообщение:
+            «Если ты видишь это —
+            значит, сигнал дошёл».
+          </p>
+
+          <button
+            class="action full"
+            onclick="toast('Продолжение истории скоро откроется')"
+          >
+            Продолжить
+          </button>
+
+        </div>
+      `
+    )}
+
+    ${card(
+      '🔒 Следующая глава',
+      `
+        <div class="item">
+
+          <b>
+            Глава 2 · След в городе
+          </b>
+
+          <p class="muted">
+            Новая глава будет открыта
+            в следующем обновлении.
+          </p>
+
+        </div>
+      `
+    )}
+
+  `;
 }
+
+/* =========================
+   CHARACTER
+========================= */
 
 function character() {
   document.getElementById('content').innerHTML =
-    head('🧑‍🎨 Собери персонажа');
+    head('🧑‍🎨 Персонаж');
 
-  document.getElementById('screen-body').innerHTML =
-    `<div class="character-preview">
+  const avatars = [
+    '🌑',
+    '🕶️',
+    '🧢',
+    '🎧',
+    '🧥',
+    '🧤',
+    '👾',
+    '🦾'
+  ];
+
+  document.getElementById('screen-body').innerHTML = `
+
+    <div class="character-preview">
       ${esc(me.player.avatar)}
     </div>
 
+    <div class="muted" style="text-align:center;margin-bottom:14px">
+      Выбери аватар
+    </div>
+
     <div class="avatar-grid">
-      ${['🌑','🕶️','🧢','🎧','🧥','🧤','👾','🦾'].map(a => `
-        <button onclick="saveAvatar('${a}')">${a}</button>
-      `).join('')}
-    </div>`;
+
+      ${avatars.map(
+        avatar => `
+          <button
+            onclick="saveAvatar('${avatar}')"
+          >
+            ${avatar}
+          </button>
+        `
+      ).join('')}
+
+    </div>
+
+  `;
 }
+
+/* =========================
+   INVENTORY
+========================= */
 
 function inventory() {
   document.getElementById('content').innerHTML =
     head('🎒 Инвентарь');
 
+  const items = me?.inventory || [];
+
   document.getElementById('screen-body').innerHTML =
-    me.inventory.map(x => `
-      <div class="row item">
-        <span>${esc(x.item)}</span>
-        <b>${x.amount}</b>
-      </div>
-    `).join('') || '<div class="muted">Пока пусто.</div>';
+    items.length
+      ? items.map(
+          item => `
+            <div class="row item">
+
+              <span>
+                ${esc(item.item)}
+              </span>
+
+              <b>
+                ${item.amount}
+              </b>
+
+            </div>
+          `
+        ).join('')
+      : `
+        <div class="item">
+          <b>🎒 Пусто</b>
+
+          <p class="muted">
+            Предметы появятся по мере прохождения игры.
+          </p>
+        </div>
+      `;
 }
+
+/* =========================
+   PROPERTY
+========================= */
 
 function property() {
   document.getElementById('content').innerHTML =
     head('🏢 Недвижимость');
 
-  document.getElementById('screen-body').innerHTML =
-    `<div class="item">
+  document.getElementById('screen-body').innerHTML = `
+
+    <div class="item">
+
       <b>🏠 Квартира</b>
+
       <p class="muted">
-        Личное пространство. Декор и новые комнаты будут открываться по мере развития.
+        Личное пространство.
+        Декор и новые комнаты будут
+        открываться по мере развития.
       </p>
+
     </div>
 
-    ${me.buildings.map(b => `
-      <div class="item">
-        <b>${icon(b.kind)} ${label(b.kind)}</b>
-        <span class="tag">ур. ${b.level}</span>
-      </div>
-    `).join('')}`;
+    ${(me.buildings || []).map(
+      building => `
+        <div class="item">
+
+          <b>
+            ${icon(building.kind)}
+            ${label(building.kind)}
+          </b>
+
+          <span class="tag">
+            ур. ${building.level}
+          </span>
+
+        </div>
+      `
+    ).join('')}
+
+  `;
 }
 
-async function arena() {
+/* =========================
+   ARENA
+========================= */
+
+function arena() {
   document.getElementById('content').innerHTML =
     head('⚔️ Арена');
 
-  document.getElementById('screen-body').innerHTML =
-    `<div class="item">
-      <b>Тренировочный бой</b>
-      <p class="muted">
-        Без ставок и потери предметов. За бой: +35 🪙 и +25 XP.
-      </p>
-      <button class="action" onclick="pvp(this)">
-        Начать тренировку
-      </button>
-    </div>`;
-}
+  document.getElementById('screen-body').innerHTML = `
 
-async function clan() {
-  document.getElementById('content').innerHTML =
-    head('👥 Кланы');
+    <div class="item">
 
-  document.getElementById('screen-body').innerHTML =
-    `<div class="item">
       <b>
-        ${me.clan
-          ? `Ты в клане «${esc(me.clan)}»`
-          : 'У тебя пока нет клана.'}
+        Тренировочный бой
       </b>
 
       <p class="muted">
-        Кланы помогают объединять игроков и участвовать в общих событиях.
+        Без ставок и потери предметов.
+        Только тренировочный режим.
       </p>
 
-      <button class="action" onclick="createClan(this)">
+      <p class="muted">
+        Награда:
+        +35 🪙 и +25 XP
+      </p>
+
+      <button
+        class="action"
+        onclick="pvp(this)"
+      >
+        Начать тренировку
+      </button>
+
+    </div>
+
+  `;
+}
+
+/* =========================
+   CLAN
+========================= */
+
+function clan() {
+  document.getElementById('content').innerHTML =
+    head('👥 Кланы');
+
+  document.getElementById('screen-body').innerHTML = `
+
+    <div class="item">
+
+      <b>
+        ${
+          me.clan
+            ? `Ты в клане «${esc(me.clan)}»`
+            : 'У тебя пока нет клана.'
+        }
+      </b>
+
+      <p class="muted">
+        Объединяйся с игроками
+        и участвуй в общих событиях.
+      </p>
+
+      <button
+        class="action"
+        onclick="createClan(this)"
+      >
         Создать клан
       </button>
-    </div>`;
+
+    </div>
+
+  `;
 }
+
+/* =========================
+   COLLECTIONS
+========================= */
 
 function collections() {
   document.getElementById('content').innerHTML =
     head('🧩 Коллекции');
 
-  document.getElementById('screen-body').innerHTML =
-    `<div class="collection-grid">
-      ${[
-        '🏙️ Районы',
-        '🚗 Транспорт',
-        '👕 Стиль',
-        '📡 Артефакты'
-      ].map(x => `
-        <div class="map-tile">
-          <b>${x}</b>
-          <small>0 собрано</small>
-        </div>
-      `).join('')}
-    </div>`;
-}
+  const collections = [
+    '🏙️ Районы',
+    '🚗 Транспорт',
+    '👕 Стиль',
+    '📡 Артефакты'
+  ];
 
-function achievements() {
-  document.getElementById('content').innerHTML =
-    head('🏆 Достижения');
+  document.getElementById('screen-body').innerHTML = `
 
-  document.getElementById('screen-body').innerHTML =
-    `<div class="list">
-      ${(me.achievements || []).map(x => `
-        <div class="item">🏅 ${esc(x)}</div>
-      `).join('') ||
-      '<div class="muted">Первые достижения откроются после действий в городе.</div>'}
-    </div>`;
-}
+    <div class="collection-grid">
 
-async function newsScreen() {
-  document.getElementById('content').innerHTML =
-    head('📰 Новости');
+      ${collections.map(
+        item => `
+          <div class="map-tile">
 
-  const n = await api(
-    '/api/news',
-    {},
-    {cache:true}
-  );
+            <b>
+              ${item}
+            </b>
 
-  document.getElementById('screen-body').innerHTML =
-    n.map(x => `
-      <div class="item">
-        <b>${esc(x.title)}</b><br>
-        <span class="muted">${esc(x.text)}</span>
-      </div>
-    `).join('');
-}
-
-function profile() {
-  document.getElementById('content').innerHTML =
-    head('👤 Профиль');
-
-  document.getElementById('screen-body').innerHTML =
-    `<div class="item">
-      <div class="big">
-        ${esc(me.player.avatar)} ${esc(me.player.name)}
-      </div>
-
-      <p class="muted">
-        Уровень ${me.player.level} · серия ${me.player.streak || 0} · ${me.player.coins} 🪙
-      </p>
-    </div>
-
-    <button class="action full" onclick="editProfile(this)">
-      Изменить профиль
-    </button>
-
-    ${card(
-      '💙 Разработчик',
-      `${esc(me.developer)}<br>
-       <span class="muted">Реальные платежи отключены.</span>`
-    )}`;
-}
-
-function help() {
-  document.getElementById('content').innerHTML =
-    head('❓ Помощь');
-
-  document.getElementById('screen-body').innerHTML =
-    `<div class="item">
-      <b>Как играть?</b>
-      <p class="muted">
-        Развивай город, собирай производство, выполняй квесты,
-        открывай районы и собирай коллекции.
-      </p>
-    </div>
-
-    <div class="item">
-      <b>Производительность</b>
-      <p class="muted">
-        Интерфейс использует минимум запросов и загружает данные
-        только при открытии раздела.
-      </p>
-    </div>`;
-}
-
-function settings() {
-  document.getElementById('content').innerHTML =
-    head('⚙️ Настройки');
-
-  document.getElementById('screen-body').innerHTML =
-    `<div class="item row">
-      <span>Лёгкие анимации</span>
-      <button class="tag"
-        onclick="document.body.classList.toggle('lite');toast('Настройка изменена')">
-        Переключить
-      </button>
-    </div>
-
-    <div class="item row">
-      <span>Версия</span>
-      <span class="muted">1.1 FAST</span>
-    </div>`;
-}
-
-async function collect(btn) {
-  setBusy(btn);
-
-  try {
-    const d = await api('/api/collect', {
-      method:'POST'
-    });
-
-    toast(`+${d.coins} 🪙`);
-
-    invalidate('/api/me');
-    me = await api('/api/me');
-
-    renderHeader();
-    city();
-  } catch(e) {
-    toast(e.message);
-  } finally {
-    setBusy(btn, false);
-  }
-}
-
-async function daily(btn) {
-  setBusy(btn);
-
-  try {
-    const d = await api('/api/daily', {
-      method:'POST'
-    });
-
-    toast(
-      d.ok
-        ? `+${d.reward} 🪙 · серия ${d.streak}`
-        : d.message
-    );
-
-    invalidate('/api/me');
-    me = await api('/api/me');
-
-    renderHeader();
-  } catch(e) {
-    toast(e.message);
-  } finally {
-    setBusy(btn, false);
-  }
-}
-
-async function upgrade(k, btn) {
-  setBusy(btn);
-
-  try {
-    await api('/api/upgrade/' + k, {
-      method:'POST'
-    });
-
-    toast('Здание улучшено');
-
-    invalidate('/api/me');
-    me = await api('/api/me');
-
-    renderHeader();
-    city();
-  } catch(e) {
-    toast(e.message);
-  } finally {
-    setBusy(btn, false);
-  }
-}
-
-async function pvp(btn) {
-  setBusy(btn);
-
-  try {
-    const d = await api('/api/pvp/training', {
-      method:'POST'
-    });
-
-    toast(`+${d.reward} 🪙`);
-
-    invalidate('/api/me');
-    me = await api('/api/me');
-
-    renderHeader();
-  } catch(e) {
-    toast(e.message);
-  } finally {
-    setBusy(btn, false);
-  }
-}
-
-async function createClan(btn) {
-  const n = prompt('Название клана');
-
-  if (!n) return;
-
-  setBusy(btn);
-
-  try {
-    await api('/api/clan/create', {
-      method:'POST',
-      body:JSON.stringify({name:n})
-    });
-
-    toast('Клан создан');
-
-    invalidate('/api/me');
-    me = await api('/api/me');
-
-    renderHeader();
-    clan();
-  } catch(e) {
-    toast(e.message);
-  } finally {
-    setBusy(btn, false);
-  }
-}
-
-async function saveAvatar(a) {
-  try {
-    await api('/api/profile', {
-      method:'POST',
-      body:JSON.stringify({avatar:a})
-    });
-
-    me.player.avatar = a;
-
-    renderHeader();
-    character();
-
-    toast('Аватар сохранён');
-  } catch(e) {
-    toast(e.message);
-  }
-}
-
-async function editProfile(btn) {
-  const n = prompt('Имя', me.player.name);
-
-  if (!n) return;
-
-  const a =
-    prompt('Аватар-эмодзи', me.player.avatar) ||
-    me.player.avatar;
-
-  setBusy(btn);
-
-  try {
-    await api('/api/profile', {
-      method:'POST',
-      body:JSON.stringify({
-        name:n,
-        avatar:a
-      })
-    });
-
-    invalidate('/api/me');
-
-    me = await api('/api/me');
-
-    renderHeader();
-    profile();
-
-    toast('Профиль сохранён');
-  } catch(e) {
-    toast(e.message);
-  } finally {
-    setBusy(btn, false);
-  }
-}
-
-load();
+            <small>
+              0 собрано
+    
