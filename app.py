@@ -15,8 +15,11 @@ app=FastAPI(title="VOID CITY Ultra")
 app.mount("/web", StaticFiles(directory="web"), name="web")
 
 def db():
-    c=sqlite3.connect(DB_PATH)
+    c=sqlite3.connect(DB_PATH, timeout=10)
     c.row_factory=sqlite3.Row
+    c.execute('PRAGMA journal_mode=WAL')
+    c.execute('PRAGMA synchronous=NORMAL')
+    c.execute('PRAGMA busy_timeout=5000')
     return c
 
 def init():
@@ -51,6 +54,10 @@ def init():
     CREATE TABLE IF NOT EXISTS clan_members(
       clan_id INTEGER, player_id INTEGER, PRIMARY KEY(clan_id,player_id)
     );
+    CREATE INDEX IF NOT EXISTS idx_players_level ON players(level DESC, xp DESC);
+    CREATE INDEX IF NOT EXISTS idx_buildings_player ON buildings(player_id);
+    CREATE INDEX IF NOT EXISTS idx_inventory_player ON inventory(player_id);
+    CREATE INDEX IF NOT EXISTS idx_quests_player ON quests(player_id);
     """)
     c.commit(); c.close()
 init()
@@ -105,7 +112,7 @@ def add_xp(c,pid,n):
     c.execute("UPDATE players SET xp=?,level=? WHERE id=?",(xp,lvl,pid))
 
 @app.get("/")
-def home(): return FileResponse("web/index.html")
+def home(): return FileResponse("web/index.html", headers={"Cache-Control":"no-cache"})
 
 @app.get("/api/me")
 def me(request:Request):
